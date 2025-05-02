@@ -1,0 +1,5 @@
+
+-icons with theme
+-add background image functionality detect, select color mode OR image mode savepreset, apply preset
+-'fluxfce logs' needs to contain the output of systemctl --user status
+- add ability to update from command line
