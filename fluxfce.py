@@ -1580,51 +1580,59 @@ def handle_manual_override_command(args: argparse.Namespace, cfg_mgr: ConfigMana
         sys.exit(1) # Exit with error
 
 def handle_log(args: argparse.Namespace):
-    """Handles the 'log' command: Displays recent journal entries."""
-    log.info("--- Displaying fluxfce Logs ---")
-    if not check_dependencies(['journalctl']):
+    """
+    Handles the 'log' command: Displays systemd status for fluxfce units.
+    (Temporary workaround for journalctl query issues)
+    """
+    # Note: args.follow is ignored in this version.
+    print("--- Displaying systemd Status for fluxfce Units (Logs Included) ---")
+    if not check_dependencies(['systemctl']):
         sys.exit(1)
 
-    # Base command targeting the relevant units/tags
-    # Include the systemd-cat tag used in schedule_transitions
-    journal_tag = SCHEDULER_SERVICE_NAME # Or APP_NAME if changed above
-    cmd = [
-        'journalctl',
-        '--user', # Look in the user journal
-        '-u', SCHEDULER_SERVICE_NAME, # Logs from schedule-jobs
-        '-u', LOGIN_SERVICE_NAME,     # Logs from run-login-check
-        '-t', journal_tag,            # Logs from internal-apply via systemd-cat
-        '--no-pager' # Direct output
+    # Define the units to check status for
+    units_to_check = [
+        SCHEDULER_SERVICE_NAME,
+        LOGIN_SERVICE_NAME,
+        SCHEDULER_TIMER_NAME  # Added the timer for completeness
     ]
 
-    # Add optional arguments
-    if args.lines:
-        cmd.extend(['-n', str(args.lines)])
-    else:
-        cmd.extend(['-n', '50']) # Default to 50 lines
+    # --- Build the systemctl command ---
+    cmd = [
+        'systemctl',
+        '--user',
+        'status',
+        '--no-pager', # Prevent interactive paging
+        # '--output=short-precise', # Optional: Cleaner timestamp format if desired
+    ]
+    cmd.extend(units_to_check) # Add all units to the command
+    # --- End command building ---
 
-    if args.follow:
-        cmd.append('-f')
-    else:
-        # Show newest first only if not following
-        cmd.append('--reverse')
+    print(f"\nExecuting: {' '.join(cmd)}\n")
 
-    print(f"\nRunning: {' '.join(cmd)}\n") # Show the user the command being run
-
-    # Execute journalctl, letting it print directly to terminal
-    # Use subprocess.call or run without capture
+    # Execute systemctl, letting it print directly to terminal
     try:
-        # We don't capture output, just run it. Check=False allows non-zero exit if logs are empty?
-        # No, journalctl usually exits 0 even if no matches. We don't need check=True.
+        # Flush stdout buffer before calling subprocess to ensure print order
+        sys.stdout.flush()
+        # Use subprocess.call - systemctl status exits non-zero if any unit is failed/not found
         return_code = subprocess.call(cmd)
-        if return_code != 0:
-             log.warning(f"journalctl command exited with code {return_code}.")
+        # systemctl status often exits 3 if any unit is inactive/not found, this is normal.
+        # No error message needed unless return_code is unexpected (e.g., command not found)
+        if return_code not in [0, 3]: # 0 = all active/loaded, 3 = some inactive/not found
+             log.warning(f"systemctl command exited with unexpected code {return_code}.")
+
     except KeyboardInterrupt:
-         print("\nLog following stopped.")
+         # Should not happen as --no-pager is used, but good practice
+         print("\nInterrupted.")
          sys.exit(0)
-    except Exception as e:
-         log.error(f"Failed to execute journalctl: {e}")
+    except FileNotFoundError:
+         log.error("Error: 'systemctl' command not found. Is it installed and in your PATH?")
          sys.exit(1)
+    except Exception as e:
+         log.error(f"Failed to execute systemctl: {e}")
+         sys.exit(1)
+
+    print("\n--- End of Status Output ---")
+    print("(Note: This shows recent logs embedded in the status. For full history, journalctl investigation is needed.)")
 
 def handle_save_preset(args: argparse.Namespace, cfg_mgr: ConfigManager, xfce_handler: XfceHandler):
     """Handles the 'save' command: save current settings to presets.ini."""
@@ -2154,9 +2162,9 @@ def main():
     subparsers.add_parser('disable', help='Disable automatic scheduling (clears scheduled transitions).')
     subparsers.add_parser('status', help='Show config, calculated times, and scheduled jobs.')
 
-    parser_log = subparsers.add_parser('log', help='Show recent fluxfce logs from the systemd journal.')
-    parser_log.add_argument('-n', '--lines', type=int, help='Number of lines to show (default: 50).')
-    parser_log.add_argument('-f', '--follow', action='store_true', help='Follow the log output.')
+    parser_log = subparsers.add_parser('log',
+                                       help='Show systemd status for fluxfce units (includes recent logs).',  # Updated help text
+                                       aliases=['logs']) # Added alias
 
     parser_save = subparsers.add_parser('save', help='Save current desktop settings as a named preset.')
     parser_save.add_argument('name', help='Name for the preset (e.g., "work_mode").')
@@ -2228,7 +2236,7 @@ def main():
             handle_enable_disable(args, cfg_mgr, atd_scheduler, enable=False)
         elif args.command == 'status':
             handle_status(args, cfg_mgr, atd_scheduler)
-        elif args.command == 'log':
+        elif args.command in ('log', 'logs'): # Explicitly check for alias
             handle_log(args)
         elif args.command == 'save':
             handle_save_preset(args, cfg_mgr, xfce_handler)
